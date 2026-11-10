@@ -1,6 +1,6 @@
 /* Load site/pages/items from Google Sheets (gviz) and render site.
    Items list is independent of pages: no auto-filtering by page. */
-var spreadsheetID = "1iwIx8sqiBTqbtAI7TX4vDGDVee3dPz0wa3MazBv2fzQ";
+var spreadsheetID = "1KhXNef0QJj48RL1NwmSPaNL9nx0aj_pB10EtzeOZy5w";
 var siteSheet  = "1569296108";
 var pagesSheet = "28080804";
 var itemsSheet = "0";
@@ -57,6 +57,77 @@ function clearFilters(collapse) {
   const $sb = $(itemsTable.searchBuilder.container());
   if (collapse) $sb.hide();
 }
+
+/* ---------- 360 panoramas (Pannellum) ----------
+   Page text contains:
+     <figure class='pano' item='room_02'></figure>
+     <figure class='pano-marker' item='room02_item01' pitch='-17' yaw='12'></figure>
+   The pano item's "File" column must be a direct URL to an equirectangular image
+   (served with CORS headers, e.g. GitHub Pages / your own images/ folder).
+   Each marker item opens its modal when clicked.
+   Panos are initialised lazily, once their page is visible, because Pannellum
+   cannot size itself inside a display:none container. */
+function initVisiblePanos() {
+  if (!itemsTable) return;                      // items not loaded yet; initComplete will call us again
+  if (typeof pannellum === 'undefined') {
+    console.warn('Pannellum library not loaded (check index.html).');
+    return;
+  }
+
+  // index item rows by ID (column 9)
+  const byId = {};
+  itemsTable.rows().every(function () {
+    const r = this.data();
+    const id = r && r.c && r.c[9] && r.c[9].v;
+    if (id) byId[String(id).trim()] = r;
+  });
+
+  $('#pages-container article:visible figure.pano').each(function () {
+    const $fig = $(this);
+    if ($fig.data('ready')) return;
+
+    const itemId = String($fig.attr('item') || '').trim();
+    const row = byId[itemId];
+    const imgUrl = row && row.c && row.c[8] && row.c[8].v;   // File column
+    if (!imgUrl) {
+      console.warn('Pano: no item or File URL for "' + itemId + '"');
+      $fig.text('Panorama image not found for item "' + itemId + '".');
+      return;
+    }
+
+    const hotSpots = [];
+    $fig.closest('article').find('figure.pano-marker').each(function () {
+      const mId  = String($(this).attr('item') || '').trim();
+      const mRow = byId[mId];
+      if (!mRow) { console.warn('Pano: marker item not found "' + mId + '"'); return; }
+      hotSpots.push({
+        pitch: parseFloat($(this).attr('pitch')) || 0,
+        yaw:   parseFloat($(this).attr('yaw'))   || 0,
+        type:  'info',
+        text:  (mRow.c[0] && mRow.c[0].v) || 'Item',
+        clickHandlerFunc: function () { modalBuild(mRow); }
+      });
+    });
+
+    const domId = 'pano-' + Math.random().toString(36).slice(2);
+    $fig.attr('id', domId).data('ready', true).empty();
+
+    try {
+      pannellum.viewer(domId, {
+        type: 'equirectangular',
+        panorama: imgUrl,
+        autoLoad: true,
+        showControls: true,
+        pitch: parseFloat($fig.attr('pitch')) || 0,
+        yaw:   parseFloat($fig.attr('yaw'))   || 0,
+        hotSpots: hotSpots
+      });
+    } catch (err) {
+      console.error('Pannellum failed for', itemId, err);
+    }
+  });
+}
+function schedulePanos() { setTimeout(initVisiblePanos, 60); }
 
 /* ---------- local XLSX → GViz-like ---------- */
 function sheetToGViz(ws) {
@@ -155,15 +226,12 @@ $(document).ready(function () {
         );
       }
     })();
-
-    // (Keeping your earlier localizing note, optional)
-    // $('.localizing').html('<h5>Localizing Tools</h5><p>This Rondo site is currently running on local files.');
   }
 });
 
 /* ---------- page navigation (no item filtering) ---------- */
 function pageChange() {
-  const query =  $(event.target).attr('pagequery'); // kept for future use if needed
+  const query =  $(event.target).attr('pagequery');
   const slug  =  $(event.target).attr('pageslug');
   const title =  $(event.target).attr('pagetitle');
 
@@ -171,11 +239,10 @@ function pageChange() {
   $('article.'+slug).show();
   $('#intro').attr('hidden','');
   if ($('article.' + slug).is(':first-child')) {
-          document.title = header;
-          $('figure.hero').show();
-        }
-        else {
-          $('figure.hero').hide();
+    document.title = header;
+    $('figure.hero').show();
+  } else {
+    $('figure.hero').hide();
   }
   var storedSearch = { "criteria": [ { "condition": "contains", "data": "Keywords", "type": "string", "value": [ query ] } ], "logic": "AND" };
   itemsTable.search('').searchBuilder.rebuild(storedSearch).draw();
@@ -190,7 +257,10 @@ function pageChange() {
 
   if (spreadsheetID == originalID) window.history.pushState(null, null, '?page='+slug);
   else window.history.pushState(null, null, '?source='+overrideSource+'&page='+slug);
+
+  schedulePanos();
 }
+
 function pageChangeIndex() {
   const target = $(event.target).attr('targetpage');
   const $art   = $("article[pageindex='" + target + "']");
@@ -202,16 +272,14 @@ function pageChangeIndex() {
   $('article.'+slug).show();
   $('#intro').attr('hidden','');
   if ($('article.' + slug).is(':first-child')) {
-          document.title = header;
-          $('figure.hero').show();
-        }
-        else {
-          $('figure.hero').hide();
+    document.title = header;
+    $('figure.hero').show();
+  } else {
+    $('figure.hero').hide();
   }
   var storedSearch = { "criteria": [ { "condition": "contains", "data": "Keywords", "type": "string", "value": [ query ] } ], "logic": "AND" };
   itemsTable.search('').searchBuilder.rebuild(storedSearch).draw();
   $('.items-head').text(title + ' - Related Items');
-
 
   $('header.top-header details').removeAttr('open');
   document.title = title + " - " + header;
@@ -221,6 +289,8 @@ function pageChangeIndex() {
 
   if (spreadsheetID == originalID) window.history.pushState(null, null, '?page='+slug);
   else window.history.pushState(null, null, '?source='+overrideSource+'&page='+slug);
+
+  schedulePanos();
 }
 
 function openPageFromQuery() {
@@ -228,7 +298,6 @@ function openPageFromQuery() {
     $('#pages-container article').hide();
     $('article.'+ openPage).show();
     const title = $('article.'+ openPage +' h2').text();
-
 
     $('article.'+ openPage +' h2').trigger('focus');
     document.title = title + " - " + header;
@@ -238,30 +307,25 @@ function openPageFromQuery() {
 
     $('#intro').attr('hidden','');
     if ($('article.' + openPage).is(':first-child')) {
-          document.title = header;
-          $('figure.hero').show();
-        }
-        else {
-          $('figure.hero').hide();
+      document.title = header;
+      $('figure.hero').show();
+    } else {
+      $('figure.hero').hide();
     }
     $('#intro').attr('hidden', '');
 
-    
   } else {
     homeOpen();
   }
+  schedulePanos();
 }
 
 function homeOpen() {
-  const firstPageHead = $('#pages-container article:nth-child(1) h2').text();
-
-
-
   $('figure.hero').show();
-  $('#intro').attr('hidden','');         // hide intro text (keep hero)
+  $('#intro').attr('hidden','');
   $('#pages-container article').hide();
   $('#pages-container article:first').show();
-
+  schedulePanos();
 }
 
 /* ---------- site/pages renderer ---------- */
@@ -274,7 +338,7 @@ function siteConfig (siteJsonData) {
   if (!openPage) { document.title = header; $('figure.hero').show(); }
   $('#head').text(header);
   $('#subhead').text(subhead);
-  if (headerImage) { $('hgroup').prepend('<img class="header-image" src="'+headerImage+'">'); $('#head').hide(); }
+  if (headerImage) { $('hgroup').prepend('<img class="header-image" src="'+headerImage+'" alt="'+header+' logo">'); $('#head').hide(); }
 
   $('hgroup *').on('click', function () {
     if (spreadsheetID == originalID) window.location = window.location.href.split("?")[0];
@@ -306,7 +370,7 @@ function pages(pagesJsonData) {
   const idx = new Map();
   rows.forEach((row, i) => {
     const title = pick(row,'title') || `Page ${i+1}`;
-    const query = pick(row,'keywords') || ''; // unused for filtering now
+    const query = pick(row,'keywords') || '';
     const slug  = (pick(row,'slug') || `page-${i}`).toString().trim();
     const isSub = String(pick(row,'subpage')||'').toLowerCase()==='true';
     const parent= (pick(row,'parent')||'').toString().trim();
@@ -372,43 +436,37 @@ function pages(pagesJsonData) {
   openPageFromQuery();
 }
 
-/* ---------- modal (no Related Resource) ---------- */
+/* ---------- modal ---------- */
 function modalBuild(row){
   const get = i => row?.c?.[i]?.v ?? '';
   const title = get(0) || '[Untitled]';
 
-  const isImg = (u)=>/\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test((u||'').trim());
-
-  const thumb = get(5), file = get(8);
-  const imgURL = isImg(thumb) ? thumb : (isImg(file) ? file : null);
-
   $('h3#modal-title').text(title);
   $('dd').empty(); $('dt').show(); $('.modal-image').empty();
 
-  // remove Related Resource row completely
+  // hide Related Resource row
   $('dd.rowRelation').empty().prev('dt').hide().end().hide();
+
   if (get(8)) {
-    var extension = get(8).split('.').pop().trim();
-    
+    var extension = get(8).split('.').pop().trim().toLowerCase();
+
     if (get(8).includes("https://www.youtube.com/watch?v=")){
       var youTubeID = get(8).split('v=').pop();
-      $('figure.modal-image').html('<iframe width="560" height="315" src="https://www.youtube.com/embed/'+youTubeID+'" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen=""></iframe>')
-    }
-    else if (extension == "png" || "jpg" || "jpeg" || "PNG" || "JPG" || "JPEG" || "webp") {
-      $('figure.modal-image').html('<a href="'+get(8)+'"><img src="'+get(8)+'" alt="'+title+'"/></a>');
+      $('figure.modal-image').html('<iframe width="560" height="315" src="https://www.youtube.com/embed/'+youTubeID+'" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen=""></iframe>');
     }
     else if (extension == "pdf") {
       $('figure.modal-image').html('<a target="_blank" role="button" href="'+get(8)+'">View PDF</a>');
+    }
+    else if (["png","jpg","jpeg","gif","webp"].includes(extension)) {
+      $('figure.modal-image').html('<a href="'+get(8)+'"><img src="'+get(8)+'" alt="'+title+'"/></a>');
     }
     else {
       $('figure.modal-image').html('<a target="_blank" role="button" href="'+get(8)+'">Download File</a>');
     }
   }
   else if (get(5)) {
-      $('figure.modal-image').html('<img src="'+get(5)+'" alt="'+title+'"/>');
-  };
-
-  //if (imgURL) $('.modal-image').html('<img src="'+imgURL+'" alt="'+title+'" loading="lazy" referrerpolicy="no-referrer">');
+    $('figure.modal-image').html('<img src="'+get(5)+'" alt="'+title+'"/>');
+  }
 
   if (get(1))  $('dd.rowDate').text(get(1));        else $('dd.rowDate').prev().hide().end().hide();
   if (get(2))  $('dd.rowCreator').text(get(2));     else $('dd.rowCreator').prev().hide().end().hide();
@@ -418,7 +476,6 @@ function modalBuild(row){
   if (get(10)) $('dd.rowCoverage').text(get(10));   else $('dd.rowCoverage').prev().hide().end().hide();
   if (get(11)) $('dd.rowFormat').text(get(11));     else $('dd.rowFormat').prev().hide().end().hide();
   if (get(12)) $('dd.rowLanguage').text(get(12));   else $('dd.rowLanguage').prev().hide().end().hide();
-
   if (get(14)) $('dd.rowRights').text(get(14));     else $('dd.rowRights').prev().hide().end().hide();
   if (get(15)) $('dd.rowSubject').text(get(15));    else $('dd.rowSubject').prev().hide().end().hide();
   if (get(16)) $('dd.rowType').text(get(16));       else $('dd.rowType').prev().hide().end().hide();
@@ -435,31 +492,28 @@ function modalBuild(row){
 
 /* ---------- items table (independent of pages) ---------- */
 function itemsDataTable(itemsJsonData) {
-   const hasItems = Array.isArray(itemsJsonData?.rows) &&
+  const hasItems = Array.isArray(itemsJsonData?.rows) &&
                    itemsJsonData.rows.some(r => r && r.c && r.c.some(cell => cell && cell.v != null && String(cell.v).trim() !== ''));
 
   if (!hasItems) {
-    $('#collection').hide();   // nothing to show
+    $('#collection').hide();
   } else {
-    $('#collection').show();   // we have at least one item
+    $('#collection').show();
   }
 
-    //First set the initial search for the table. if there is a page in the query, the slug of that page becomes the initial search
-    var initialSearch = {"columns": [0,1,2,3,4,7,10,11,12,13,14,15,16,17]};
-    if (openPage) {
-      var thisPageQuery = $('article.'+openPage).attr('pagequery');
-      if (thisPageQuery) {
-          initialSearch = {"preDefined": { "criteria": [ { "condition": "contains", "data": "Keywords", "type": "string", "value": [ thisPageQuery ] } ], "logic": "AND" }, "columns": [0,1,2,3,4,7,10,11,12,13,14,15,16,17]};
+  var initialSearch = {"columns": [0,1,2,3,4,7,10,11,12,13,14,15,16,17]};
+  if (openPage) {
+    var thisPageQuery = $('article.'+openPage).attr('pagequery');
+    if (thisPageQuery) {
+      initialSearch = {"preDefined": { "criteria": [ { "condition": "contains", "data": "Keywords", "type": "string", "value": [ thisPageQuery ] } ], "logic": "AND" }, "columns": [0,1,2,3,4,7,10,11,12,13,14,15,16,17]};
     }
-  }
-  //If there's no page, use the slug from the homepage
-  else if (homeQuery) {
+  } else if (homeQuery) {
     initialSearch = {"preDefined": { "criteria": [ { "condition": "contains", "data": "Keywords", "type": "string", "value": [ homeQuery ] } ], "logic": "AND" }, "columns": [0,1,2,3,4,7,10,11,12,13,14,15,16,17]};
-  };
+  }
 
   itemsTable = $('#items').DataTable({
     data: itemsJsonData.rows,
-    dom: 'fQtipr',             // keep SearchBuilder available without Buttons
+    dom: 'fQtipr',
     searchBuilder : initialSearch,
     columns: [
       { data: 'c.0.v',  title: itemsJsonData.cols[0].label,  name:'title',     class: itemsJsonData.cols[0].label, defaultContent: '[Untitled]' },
@@ -491,7 +545,6 @@ function itemsDataTable(itemsJsonData) {
       search: "",
       searchBuilder: { title: {0:'Filter / Advanced Search', _: 'Filter / Advanced Search (%d)'}, data: 'Field' }
     },
-    // (Removed per-draw click-binding; we'll delegate once in initComplete)
     initComplete: function(){
       var api = this.api();
 
@@ -510,26 +563,23 @@ function itemsDataTable(itemsJsonData) {
         $('.items-head').text('All Items');
       });
 
-      //figure
-        $('#pages-container figure.include-item').each(function( i ) {
+      // figure include-item
+      $('#pages-container figure.include-item').each(function( i ) {
         var thisFigure = $(this);
         var thisItem = $(this).attr('item');
-         api.rows().every(function () {
+        api.rows().every(function () {
           var row = this.data();
           if (row?.c?.[9]?.v == thisItem) {
-             if (row.c[8]) {
+            if (row.c[8]) {
               thisFigure.html('<img src="'+row.c[8].v+'" alt="'+row.c[0].v+'"/><figcaption>'+row.c[0].v+'</figcaption>');
+            } else if (row.c[5]) {
+              thisFigure.html('<img src="'+row.c[5].v+'" alt="'+row.c[0].v+'"/><figcaption>'+row.c[0].v+'</figcaption>');
             }
-            else if (row.c[5]) {
-                thisFigure.html('<img src="'+row.c[5].v+'" alt="'+row.c[0].v+'"/><figcaption>'+row.c[0].v+'</figcaption>');
-            };
-            thisFigure.on('click', function() {
-              modalBuild(row);
-            });
-            }
-          });
+            thisFigure.on('click', function() { modalBuild(row); });
+          }
         });
-      
+      });
+
       // hero → modal by ID
       var heroFigure = $('.hero').attr('item');
       if (heroFigure) {
@@ -555,12 +605,14 @@ function itemsDataTable(itemsJsonData) {
         });
       $filter.append($toggle);
 
-      /* COMMENTED: force-show of items section (list section)
-      $('#pages-container, #collection').show();
-      */
-      $('#pages-container').show();
+      // Accessibility: label the search input
+      $filter.find('input[type="search"]').attr('aria-label', 'Search items');
 
+      $('#pages-container').show();
       $('main').attr('aria-busy','false');
+
+      // Items are loaded now: build any 360 panoramas on the visible page
+      initVisiblePanos();
     }
   });
 }
